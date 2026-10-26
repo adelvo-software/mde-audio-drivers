@@ -1,5 +1,7 @@
 # MDE Audio Drivers — Virtual Stereo Audio Devices for macOS
 
+[![Support my work on Ko-fi](https://img.shields.io/badge/%E2%99%A5_Support_my_work-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/adelvo)
+
 Free macOS installer that creates up to **8 independent virtual stereo audio devices** based on [BlackHole](https://github.com/ExistentialAudio/BlackHole). Built for [MDE — Mix Desk EQ](https://adelvo.io/mix-desk-eq/), but works with any audio application.
 
 ![MDE Audio Driver Installer](docs/installer.jpg)
