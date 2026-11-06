@@ -1,7 +1,10 @@
 #!/bin/bash
 
 # ============================================================
-# MixDeskEQ for macOS – Audio Driver Installer Builder
+# MixDesk X – Adelvo Audio Drivers – Installer Builder
+# 2.0.1 (06.11.2026): Tabelle im Begrüßungstext ohne feste Hintergründe (Dark Mode).
+# 2.0.0 (06.11.2026): Umbenennung MixDeskEQ → MixDesk X, optionales 16-Kanal-Gerät,
+# alte MixDeskEQ-Treiber werden bei der Installation entfernt.
 #
 # Creates a .pkg installer with selectable components.
 # The user can click "Customize" in the installer and
@@ -20,27 +23,34 @@ set -e
 
 # ── Configuration ─────────────────────────────────────────
 
-# Instances: "Display Name|internal_suffix"
+# Instances: "Display Name|internal_suffix|channels"
 # The first DEFAULT_SELECTED will be pre-selected in the installer.
 INSTANCES=(
-    "MixDeskEQ System|system"
-    "MixDeskEQ WebRTC|webrtc"
-    "MixDeskEQ Mix 3|mix3"
-    "MixDeskEQ Mix 4|mix4"
-    "MixDeskEQ Mix 5|mix5"
-    "MixDeskEQ Mix 6|mix6"
-    "MixDeskEQ Mix 7|mix7"
-    "MixDeskEQ Mix 8|mix8"
+    "MixDesk X System|system|2"
+    "MixDesk X WebRTC|webrtc|2"
+    "MixDesk X Mix 3|mix3|2"
+    "MixDesk X Mix 4|mix4|2"
+    "MixDesk X Mix 5|mix5|2"
+    "MixDesk X Mix 6|mix6|2"
+    "MixDesk X Mix 7|mix7|2"
+    "MixDesk X Mix 8|mix8|2"
+    "MixDesk X 16ch|16ch|16"
 )
 
 TOTAL_INSTANCES=${#INSTANCES[@]}
 DEFAULT_SELECTED=2
 
 # Installer metadata
-PKG_IDENTIFIER_BASE="io.adelvo.mixdeskeq.bus"
-PKG_VERSION="1.0.0"
-PKG_TITLE="MixDeskEQ Audio Driver for macOS"
-INSTALLER_FILENAME="MixDeskEQ-AudioDrivers-${PKG_VERSION}"
+PKG_IDENTIFIER_BASE="com.adelvo.mixdeskx.bus"
+OLD_PKG_IDENTIFIER_BASE="com.adelvo.mixdeskeq.bus"   # 1.x – wird bei Installation entfernt
+PKG_VERSION="2.0.1"
+PKG_TITLE="MixDesk X – Adelvo Audio Drivers"
+INSTALLER_FILENAME="MixDeskX-AudioDrivers-${PKG_VERSION}"
+
+# Signieren + Notarisieren (Zertifikate im Anmelde-Schlüsselbund; Sicherung: SYNC/Büro/adelvo/zertifikate/)
+APP_SIGN_ID="Developer ID Application: Mathias Mathias (G539CDL493)"      # für die .driver-Bundles
+PKG_SIGN_ID="Developer ID Installer: Mathias Schneider (G539CDL493)"      # für die .pkg
+NOTARY_PROFILE="notarytool-profile"
 
 # ── Colors ────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -60,7 +70,7 @@ HAL_RELATIVE="Library/Audio/Plug-Ins/HAL"
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║   MixDeskEQ for macOS – Installer Builder                ║${NC}"
+echo -e "${CYAN}║   MixDesk X – Audio Drivers – Installer Builder          ║${NC}"
 echo -e "${CYAN}║                                                          ║${NC}"
 echo -e "${CYAN}║   Building ${TOTAL_INSTANCES} instances, ${DEFAULT_SELECTED} pre-selected.                ║${NC}"
 echo -e "${CYAN}║   User selects components via checkboxes in installer.   ║${NC}"
@@ -80,7 +90,7 @@ done
 echo ""
 echo -e "${BOLD}Building ${TOTAL_INSTANCES} instances:${NC}"
 for ((i=0; i<TOTAL_INSTANCES; i++)); do
-    IFS='|' read -r name suffix <<< "${INSTANCES[$i]}"
+    IFS='|' read -r name suffix ch <<< "${INSTANCES[$i]}"
     default=""
     [ $((i+1)) -le $DEFAULT_SELECTED ] && default=" ${GREEN}(pre-selected)${NC}"
     echo -e "  🎧 ${name}${default}"
@@ -107,20 +117,22 @@ echo -e "${CYAN}▶ Compiling instances...${NC}"
 COMPONENT_PKGS=()
 
 for ((i=0; i<TOTAL_INSTANCES; i++)); do
-    IFS='|' read -r device_name safe_suffix <<< "${INSTANCES[$i]}"
+    IFS='|' read -r device_name safe_suffix channels <<< "${INSTANCES[$i]}"
     num=$((i+1))
     bundle_id="${PKG_IDENTIFIER_BASE}.${safe_suffix}"
-    driver_filename="MixDeskEQ_${safe_suffix}.driver"
+    driver_filename="MixDeskX_${safe_suffix}.driver"
 
     echo -e "\n  ${YELLOW}[${num}/${TOTAL_INSTANCES}]${NC} Building \"${device_name}\"..."
 
     # Config header for this instance (clean way to pass string literals)
     config_header="${CONFIGS_DIR}/config_${safe_suffix}.h"
     cat > "${config_header}" << CONFEOF
-#define kDriver_Name "MixDeskEQ_${safe_suffix}"
+#define kDriver_Name "MixDeskX_${safe_suffix}"
 #define kDevice_Name "${device_name}"
-#define kNumber_Of_Channels 2
+#define kNumber_Of_Channels ${channels}
 #define kHas_Driver_Name_Format 0
+#define kPlugIn_BundleID "${bundle_id}"
+#define kManufacturer_Name "Adelvo"
 CONFEOF
 
     cd "${REPO_DIR}"
@@ -151,9 +163,12 @@ CONFEOF
     mkdir -p "${inst_scripts}"
 
     cp -R "$built_driver" "${inst_payload}/${HAL_RELATIVE}/${driver_filename}"
+    # Ohne diese Signatur lehnt Apple die Notarisierung ab ("The binary is not signed", 1.0.0-Lehre 25.09.2026)
+    codesign --force --options runtime --timestamp --sign "${APP_SIGN_ID}" "${inst_payload}/${HAL_RELATIVE}/${driver_filename}" 2>/dev/null
+    codesign --verify --strict "${inst_payload}/${HAL_RELATIVE}/${driver_filename}" || { echo -e "  ${RED}✗ Signatur des Treibers ungültig${NC}"; exit 1; }
 
     # Postinstall: restart CoreAudio
-    cat > "${inst_scripts}/postinstall" << 'EOF'
+    cat > "${inst_scripts}/postinstall" << EOF
 #!/bin/bash
 killall -9 coreaudiod 2>/dev/null || true
 exit 0
@@ -174,43 +189,68 @@ EOF
     echo -e "  ${GREEN}✓${NC} \"${device_name}\""
 done
 
+# ── Migration: alte MixDeskEQ-Treiber (1.x) entfernen ─────
+# Unsichtbare, immer installierte Komponente. Läuft VOR den Bussen (preinstall).
+MIG_SCRIPTS="${BUILD_DIR}/scripts_migrate"
+mkdir -p "${MIG_SCRIPTS}"
+cat > "${MIG_SCRIPTS}/preinstall" << MIGEOF
+#!/bin/bash
+HAL="/Library/Audio/Plug-Ins/HAL"
+rm -rf "\${HAL}"/MixDeskEQ_*.driver 2>/dev/null || true
+for id in \$(pkgutil --pkgs | grep '^${OLD_PKG_IDENTIFIER_BASE}'); do pkgutil --forget "\$id" >/dev/null 2>&1 || true; done
+exit 0
+MIGEOF
+chmod 755 "${MIG_SCRIPTS}/preinstall"
+pkgbuild --nopayload --scripts "${MIG_SCRIPTS}" --identifier "${PKG_IDENTIFIER_BASE}.migrate" --version "${PKG_VERSION}" "${BUILD_DIR}/component_migrate.pkg" &>/dev/null
+echo -e "  ${GREEN}✓${NC} Migration (entfernt MixDeskEQ 1.x)"
+
 # ── Welcome HTML ──────────────────────────────────────────
 echo ""
 echo -e "${CYAN}▶ Creating installer resources...${NC}"
 
 cat > "${RESOURCES_DIR}/welcome.html" << 'WELCOME_EOF'
 <html>
-<head><meta charset="utf-8"></head>
+<head><meta charset="utf-8"><meta name="color-scheme" content="light dark"></head>
 <body style="font-family: -apple-system, Helvetica Neue, sans-serif; padding: 20px; line-height: 1.6;">
-<h2>MixDeskEQ for macOS</h2>
-<p>This installer sets up virtual audio buses that MixDeskEQ uses
+<h2>MixDesk X – Adelvo Audio Drivers</h2>
+<p>This installer sets up virtual audio buses that MixDesk X uses
 for routing audio between applications.</p>
 
 <p><strong>How it works:</strong></p>
-<p>Each bus is an independent stereo audio device. Audio sent to a
+<p>Each bus is an independent stereo audio device (the optional
+<em>16ch</em> device has 16 channels, for MixDesk X Pro multichannel routing). Audio sent to a
 bus <em>output</em> appears at the <em>input</em> of the same bus
 &mdash; like a virtual audio cable.</p>
 
 <p><strong>Example Setup:</strong></p>
 <table style="border-collapse: collapse; font-size: 13px; margin: 10px 0;">
-<tr style="background: #f0f0f0;">
-  <td style="padding: 6px 12px; border: 1px solid #ddd;"><strong>System</strong></td>
-  <td style="padding: 6px 12px; border: 1px solid #ddd;">macOS system audio &rarr; MixDeskEQ input</td>
+<tr>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top; white-space: nowrap;"><strong>System</strong></td>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top;">macOS system audio &rarr; MixDesk X input</td>
 </tr>
 <tr>
-  <td style="padding: 6px 12px; border: 1px solid #ddd;"><strong>WebRTC</strong></td>
-  <td style="padding: 6px 12px; border: 1px solid #ddd;">MixDeskEQ mix &rarr; Browser / video conferencing</td>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top; white-space: nowrap;"><strong>WebRTC</strong></td>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top;">MixDesk X mix &rarr; Browser / video conferencing</td>
 </tr>
-<tr style="background: #f0f0f0;">
-  <td style="padding: 6px 12px; border: 1px solid #ddd;"><strong>Mix 3+</strong></td>
-  <td style="padding: 6px 12px; border: 1px solid #ddd;">Additional outputs for OBS, recording, etc.</td>
+<tr>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top; white-space: nowrap;"><strong>Mix 3+</strong></td>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top;">Additional outputs for OBS, recording, etc.</td>
+</tr>
+<tr>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top; white-space: nowrap;"><strong>16ch</strong></td>
+  <td style="padding: 6px 12px; border: 1px solid rgba(128,128,128,0.45); vertical-align: top;">One device, 8 stereo pairs (MixDesk X Pro: pairs 3+4 and up)</td>
 </tr>
 </table>
 
 <p>Click <strong>&ldquo;Customize&rdquo;</strong> to choose how many
 buses to install. 2 buses are sufficient for most setups.</p>
 
-<p style="color: #888; font-size: 11px;">Based on BlackHole (GPL-3.0) &middot; MixDeskEQ</p>
+<p><strong>Upgrading from the MixDeskEQ drivers?</strong> The old
+&ldquo;MixDeskEQ &hellip;&rdquo; devices are removed and replaced by
+&ldquo;MixDesk X &hellip;&rdquo;. Apps that used them (Discord, Zoom, OBS &hellip;)
+need the new device selected once.</p>
+
+<p style="opacity: 0.6; font-size: 11px;">Based on BlackHole (GPL-3.0) &middot; MixDesk X by Adelvo</p>
 </body>
 </html>
 WELCOME_EOF
@@ -218,7 +258,7 @@ WELCOME_EOF
 # ── Conclusion HTML ───────────────────────────────────────
 cat > "${RESOURCES_DIR}/conclusion.html" << 'CONCLUSION_EOF'
 <html>
-<head><meta charset="utf-8"></head>
+<head><meta charset="utf-8"><meta name="color-scheme" content="light dark"></head>
 <body style="font-family: -apple-system, Helvetica Neue, sans-serif; padding: 20px; line-height: 1.6;">
 <h2>Installation Complete</h2>
 <p>Your audio buses are now available in:</p>
@@ -226,9 +266,9 @@ cat > "${RESOURCES_DIR}/conclusion.html" << 'CONCLUSION_EOF'
 <li><strong>System Settings &rarr; Sound</strong> (selectable as output device)</li>
 <li><strong>Audio MIDI Setup</strong> (for verification and configuration)</li>
 <li><strong>All audio applications</strong> (as input and output)</li>
-<li><strong>MixDeskEQ</strong> (as routing target)</li>
+<li><strong>MixDesk X</strong> (as routing target)</li>
 </ul>
-<p>You can assign custom names to buses within MixDeskEQ
+<p>You can assign custom names to buses within MixDesk X
 to keep track of which bus is used for what.</p>
 <p><strong>Tip:</strong> Open <em>Audio MIDI Setup</em>
 (Applications &rarr; Utilities) to verify that all buses
@@ -255,16 +295,24 @@ cat > "${DIST_XML}" << DISTHEAD
     <choices-outline>
 DISTHEAD
 
+echo "        <line choice=\"migrate\"/>" >> "${DIST_XML}"
 for ((i=0; i<TOTAL_INSTANCES; i++)); do
-    IFS='|' read -r name suffix <<< "${INSTANCES[$i]}"
+    IFS='|' read -r name suffix ch <<< "${INSTANCES[$i]}"
     echo "        <line choice=\"${suffix}\"/>" >> "${DIST_XML}"
 done
 
 echo "    </choices-outline>" >> "${DIST_XML}"
+cat >> "${DIST_XML}" << DISTMIG
+    <choice id="migrate" visible="false" start_selected="true" enabled="false">
+        <pkg-ref id="${PKG_IDENTIFIER_BASE}.migrate"/>
+    </choice>
+    <pkg-ref id="${PKG_IDENTIFIER_BASE}.migrate" version="${PKG_VERSION}">component_migrate.pkg</pkg-ref>
+DISTMIG
 
 for ((i=0; i<TOTAL_INSTANCES; i++)); do
-    IFS='|' read -r device_name safe_suffix <<< "${INSTANCES[$i]}"
+    IFS='|' read -r device_name safe_suffix channels <<< "${INSTANCES[$i]}"
     bundle_id="${PKG_IDENTIFIER_BASE}.${safe_suffix}"
+    if [ "${channels}" = "2" ]; then devdesc="virtual stereo audio device"; else devdesc="virtual ${channels}-channel audio device (8 stereo pairs; pairs 3+4 and up need MixDesk X Pro)"; fi
 
     if [ $((i+1)) -le $DEFAULT_SELECTED ]; then
         start_selected="true"
@@ -275,7 +323,7 @@ for ((i=0; i<TOTAL_INSTANCES; i++)); do
     cat >> "${DIST_XML}" << DISTCHOICE
     <choice id="${safe_suffix}"
             title="${device_name}"
-            description="Installs the virtual stereo audio device '${device_name}'. Can be used as input and output in all audio applications."
+            description="Installs the ${devdesc} '${device_name}'. Can be used as input and output in all audio applications."
             start_selected="${start_selected}"
             start_enabled="true"
             start_visible="true">
@@ -291,9 +339,17 @@ productbuild \
     --distribution "${DIST_XML}" \
     --resources "${RESOURCES_DIR}" \
     --package-path "${BUILD_DIR}" \
-    "${OUTPUT_DIR}/${INSTALLER_FILENAME}.pkg" &>/dev/null
+    "${BUILD_DIR}/${INSTALLER_FILENAME}-unsigned.pkg" &>/dev/null
 
-echo -e "${GREEN}✓${NC} Installer: ${OUTPUT_DIR}/${INSTALLER_FILENAME}.pkg"
+sign_and_notarize() {   # <unsigniert.pkg> <ziel.pkg>
+    productsign --sign "${PKG_SIGN_ID}" --timestamp "$1" "$2" >/dev/null 2>&1 || { echo -e "${RED}✗ productsign fehlgeschlagen${NC}"; exit 1; }
+    echo "   notarisieren…"
+    xcrun notarytool submit "$2" --keychain-profile "${NOTARY_PROFILE}" --wait 2>&1 | grep -E "status:" | tail -1 | grep -q "Accepted" || { echo -e "${RED}✗ Notarisierung abgelehnt — Protokoll: xcrun notarytool log <id> --keychain-profile ${NOTARY_PROFILE}${NC}"; exit 1; }
+    xcrun stapler staple "$2" >/dev/null 2>&1 || { echo -e "${RED}✗ stapler fehlgeschlagen${NC}"; exit 1; }
+    spctl -a -t install -vv "$2" 2>&1 | grep -q "Notarized Developer ID" || { echo -e "${RED}✗ Gatekeeper akzeptiert das Paket nicht${NC}"; exit 1; }
+}
+sign_and_notarize "${BUILD_DIR}/${INSTALLER_FILENAME}-unsigned.pkg" "${OUTPUT_DIR}/${INSTALLER_FILENAME}.pkg"
+echo -e "${GREEN}✓${NC} Installer (signiert, notarisiert, gestapelt): ${OUTPUT_DIR}/${INSTALLER_FILENAME}.pkg"
 
 # ── Uninstaller ───────────────────────────────────────────
 echo ""
@@ -308,13 +364,14 @@ HAL="/Library/Audio/Plug-Ins/HAL"
 UNEOF
 
 for ((i=0; i<TOTAL_INSTANCES; i++)); do
-    IFS='|' read -r name suffix <<< "${INSTANCES[$i]}"
-    echo "rm -rf \"\${HAL}/MixDeskEQ_${suffix}.driver\"" >> "${UNINST_SCRIPTS}/postinstall"
+    IFS='|' read -r name suffix ch <<< "${INSTANCES[$i]}"
+    echo "rm -rf \"\${HAL}/MixDeskX_${suffix}.driver\"" >> "${UNINST_SCRIPTS}/postinstall"
 done
+echo 'rm -rf "${HAL}"/MixDeskEQ_*.driver' >> "${UNINST_SCRIPTS}/postinstall"
 
 cat >> "${UNINST_SCRIPTS}/postinstall" << 'UNEOF2'
 killall -9 coreaudiod 2>/dev/null || true
-for id in $(pkgutil --pkgs | grep io.adelvo.mixdeskeq.bus); do
+for id in $(pkgutil --pkgs | grep -E 'com\.adelvo\.mixdesk(eq|x)\.bus'); do
     pkgutil --forget "$id" 2>/dev/null || true
 done
 exit 0
@@ -324,15 +381,15 @@ chmod 755 "${UNINST_SCRIPTS}/postinstall"
 mkdir -p "${BUILD_DIR}/uninstall_resources"
 cat > "${BUILD_DIR}/uninstall_resources/welcome.html" << 'UNWELCOME'
 <html>
-<head><meta charset="utf-8"></head>
+<head><meta charset="utf-8"><meta name="color-scheme" content="light dark"></head>
 <body style="font-family: -apple-system, Helvetica Neue, sans-serif; padding: 20px; line-height: 1.6;">
-<h2>MixDeskEQ for macOS &mdash; Uninstall</h2>
-<p>This will remove <strong>all</strong> MixDeskEQ audio buses
+<h2>MixDesk X Audio Drivers &mdash; Uninstall</h2>
+<p>This will remove <strong>all</strong> MixDesk X audio buses (and old MixDeskEQ buses)
 from your system.</p>
 <p>After uninstalling, the devices will no longer be available in
 System Settings, Audio MIDI Setup, or any other applications.</p>
 <p style="color: #c00;"><strong>Please close all audio applications
-including MixDeskEQ before proceeding.</strong></p>
+including MixDesk X before proceeding.</strong></p>
 </body>
 </html>
 UNWELCOME
@@ -349,7 +406,7 @@ UNINST_DIST="${BUILD_DIR}/uninstall_distribution.xml"
 cat > "${UNINST_DIST}" << UNDIST
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>MixDeskEQ for macOS – Uninstall</title>
+    <title>MixDesk X – Adelvo Audio Drivers – Uninstall</title>
     <welcome file="welcome.html"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
@@ -367,9 +424,10 @@ productbuild \
     --distribution "${UNINST_DIST}" \
     --resources "${BUILD_DIR}/uninstall_resources" \
     --package-path "${BUILD_DIR}" \
-    "${OUTPUT_DIR}/${INSTALLER_FILENAME}-Uninstall.pkg" &>/dev/null
+    "${BUILD_DIR}/${INSTALLER_FILENAME}-Uninstall-unsigned.pkg" &>/dev/null
 
-echo -e "${GREEN}✓${NC} Uninstaller: ${OUTPUT_DIR}/${INSTALLER_FILENAME}-Uninstall.pkg"
+sign_and_notarize "${BUILD_DIR}/${INSTALLER_FILENAME}-Uninstall-unsigned.pkg" "${OUTPUT_DIR}/${INSTALLER_FILENAME}-Uninstall.pkg"
+echo -e "${GREEN}✓${NC} Uninstaller (signiert, notarisiert, gestapelt): ${OUTPUT_DIR}/${INSTALLER_FILENAME}-Uninstall.pkg"
 
 # ── Cleanup ───────────────────────────────────────────────
 echo ""
@@ -391,14 +449,4 @@ echo "    2. Install type: Standard (System + WebRTC) or Customize"
 echo "    3. On \"Customize\": Independent checkboxes for all ${TOTAL_INSTANCES} devices"
 echo "    4. Conclusion screen with tips"
 echo ""
-echo -e "  ${YELLOW}To sign:${NC}"
-echo "    productsign --sign \"Developer ID Installer: YOUR NAME\" \\"
-echo "      \"${OUTPUT_DIR}/${INSTALLER_FILENAME}.pkg\" \\"
-echo "      \"${OUTPUT_DIR}/${INSTALLER_FILENAME}-signed.pkg\""
-echo ""
-echo -e "  ${YELLOW}To notarize:${NC}"
-echo "    xcrun notarytool submit \"${OUTPUT_DIR}/${INSTALLER_FILENAME}-signed.pkg\" \\"
-echo "      --apple-id YOUR@EMAIL --team-id TEAM_ID \\"
-echo "      --password APP_SPECIFIC_PASSWORD --wait"
-echo "    xcrun stapler staple \"${OUTPUT_DIR}/${INSTALLER_FILENAME}-signed.pkg\""
-echo ""
+echo "  Signiert mit ${PKG_SIGN_ID}, notarisiert und gestapelt — direkt verteilbar."
